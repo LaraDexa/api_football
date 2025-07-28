@@ -97,6 +97,8 @@ def train_global_pass_models():
             X_all, y_clip
         )
         global_models[t] = best_rf
+        
+train_global_pass_models()
 
 # Función de predicción para todos los jugadores
 def predecir_estadisticas_para_todos(predict_match: int = 21):
@@ -198,77 +200,18 @@ def predecir_estadisticas_para_todos(predict_match: int = 21):
 
     return results
 
-
-# Función de predicción para un solo jugador (similar lógica)
-# def predecir_todas_estadisticas_pase(player_id: int, partido_a_predecir: int = 21):
-#     df_player = df_scaled[df_scaled["Id"] == player_id].sort_values("Date").reset_index(drop=True)
-#     player_name = df_player["Name"].iloc[0]
-
-#     MIN_REQUIRED = 3
-#     if len(df_player) < MIN_REQUIRED:
-#         return {"error": f"El jugador '{player_id}' solo tiene {len(df_player)} partidos. Se requieren al menos {MIN_REQUIRED} para hacer una predicción razonable."}
-
-#     if len(df_player) < partido_a_predecir:
-#         partido_a_predecir = len(df_player)
-
-#     train_df = df_player.iloc[:partido_a_predecir - 1]
-#     test_df  = df_player.iloc[partido_a_predecir - 1]
-#     advertencias = []
-#     if len(train_df) < 10:
-#         advertencias.append("Predicción hecha con menos de 10 partidos, menos confiable.")
-
-#     resultados = {}
-#     for target in PASSES_TARGETS:
-#         X_train = train_df[PASS_INPUT_FEATURES]
-#         y_train = train_df[target]
-
-#         lower, upper = y_train.quantile(0.05), y_train.quantile(0.95)
-#         y_train = y_train.clip(lower, upper)
-
-#         X_test = test_df[PASS_INPUT_FEATURES].values.reshape(1, -1)
-#         y_true = test_df[target]
-
-#         base = elegir_modelo(len(train_df))
-#         if isinstance(base, RandomForestRegressor):
-#             model = tune_model(base, RF_PARAMS, X_train, y_train)
-#         elif isinstance(base, Ridge):
-#             model = tune_model(base, RIDGE_PARAMS, X_train, y_train)
-#         else:
-#             model = tune_model(base, KNN_PARAMS, X_train, y_train)
-
-#         pred = model.predict(X_test)[0]
-#         y_pred_train = model.predict(X_train)
-#         r2 = r2_score(y_train, y_pred_train)
-#         mae = mean_absolute_error(y_train, y_pred_train)
-        
-#         if hasattr(model, "feature_importances_"):
-#             imps = model.feature_importances_
-#         elif hasattr(model, "coef_"):
-#             imps = abs(model.coef_)
-#         else:
-#             imps = [None] * len(PASS_INPUT_FEATURES)
-
-#         importancias = sorted(
-#             [
-#                 {"feature": feat, "importance": None if v is None else round(v, 4)}
-#                 for feat, v in zip(PASS_INPUT_FEATURES, imps)
-#             ], key=lambda x: x["importance"] or 0, reverse=True
-#         )
-
-#         resultados[target] = {
-#             "predicted_value": round(float(pred), 2),
-#             "real_value":      float(y_true),
-#             "r2_train":        round(r2, 3),
-#             "mae_train":       round(mae, 2),
-#             "model_used":      model.__class__.__name__,
-#             "feature_importance": importancias
-#         }
-
-#     return {
-#         "player_id": player_id,
-#         "player_name": player_name,
-#         "match_number": partido_a_predecir,
-#         "games_used": len(train_df),
-#         "warnings": advertencias,
-#         "predictions": resultados
-#     }
+# Nueva función: predicción para un solo jugador por su ID
+def predecir_estadisticas_por_jugador(player_id: int, predict_match: int = 21):
+    sub = df_scaled[df_scaled["Id"] == player_id].sort_values("Date").reset_index(drop=True)
+    if len(sub) < 3:
+        return {"player_id": player_id, "player_name": None, "predictions": {}}
+    m = min(len(sub), predict_match)
+    test = sub.iloc[m-1:m]
+    name = sub["Name"].iloc[0]
+    preds = {}
+    for t in targets:
+        y_true = test[t].iloc[0]
+        model = global_models[t]
+        pred = model.predict(test[features].values.reshape(1, -1))[0]
+        preds[t] = {"real_value": float(y_true), "predicted_value": round(float(pred),2)}
+    return {"player_id": player_id, "player_name": name, "predictions": preds}
