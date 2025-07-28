@@ -201,7 +201,7 @@ def predecir_estadisticas_para_todos(predict_match: int = 21):
     return results
 
 # Nueva función: predicción para un solo jugador por su ID
-def predecir_estadisticas_por_jugador(player_id: int, predict_match: int = 21):
+def predecir_estadisticas_pase_por_jugador(player_id: int, predict_match: int = 21):
     sub = df_scaled[df_scaled["Id"] == player_id].sort_values("Date").reset_index(drop=True)
     if len(sub) < 3:
         return {"player_id": player_id, "player_name": None, "predictions": {}}

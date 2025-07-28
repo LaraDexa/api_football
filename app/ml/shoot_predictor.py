@@ -125,3 +125,23 @@ def predecir_estadisticas_ofensivas(predict_match: int = 21):
         })
 
     return out
+
+def predecir_estadisticas_tiro_por_jugador(player_id: int, predict_match: int = 21):
+    """
+    Retorna las predicciones (y valor real) para un solo jugador ofensivo.
+    """
+    sub = df[df["Id"] == player_id].sort_values("Date").reset_index(drop=True)
+    if len(sub) < 3:
+        return {"player_id": player_id, "player_name": None, "predictions": {}}
+
+    m    = min(len(sub), predict_match)
+    test = sub.iloc[m - 1 : m]
+    name = sub["Name"].iloc[0]
+    preds = {}
+    for t in OFF_TARGETS:
+        y_true = test[t].iloc[0]
+        y_pred = models[t].predict(test)[0]
+        preds[t] = {"real_value": float(y_true), "predicted_value": round(float(y_pred), 2)}
+
+    return {"player_id": player_id, "player_name": name, "match_number": int(m), "predictions": preds}
+

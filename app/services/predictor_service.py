@@ -1,9 +1,10 @@
 from app.ml.pass_predictor import (
     predecir_estadisticas_para_todos,
-    predecir_estadisticas_por_jugador
+    predecir_estadisticas_pase_por_jugador
     )
 from app.ml.shoot_predictor import (
-    predecir_estadisticas_ofensivas
+    predecir_estadisticas_ofensivas,
+    predecir_estadisticas_tiro_por_jugador
     )
 
 def predecir_estadisticas_para_todos_pase():
@@ -12,6 +13,8 @@ def predecir_estadisticas_para_todos_pase():
 def predecir_todas_estadisticas_ofensivas():
     return predecir_estadisticas_ofensivas()
 
-def predecir_estradistica_por_jugador(player_id: int):
-    return predecir_estadisticas_por_jugador(player_id)
+def predecir_estradistica_pase_por_jugador(player_id: int):
+    return predecir_estadisticas_pase_por_jugador(player_id)
 
+def predecir_estradistica_tiro_por_jugador(player_id: int):
+    return predecir_estadisticas_tiro_por_jugador(player_id)

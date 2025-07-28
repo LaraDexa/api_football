@@ -1,6 +1,5 @@
 from fastapi import APIRouter
-from app.models.schemas import PlayerRequest
-from app.services.predictor_service import predecir_estadisticas_para_todos_pase, predecir_estradistica_por_jugador
+from app.services.predictor_service import predecir_estadisticas_para_todos_pase, predecir_estradistica_pase_por_jugador, predecir_estradistica_tiro_por_jugador
 from app.services.predictor_service import predecir_todas_estadisticas_ofensivas
 
 router = APIRouter()
@@ -17,5 +16,8 @@ def predecir_ofensivas():
 
 @router.get("/predict/pass/{player_id}")
 def predecir_pass_por_player(player_id: int):
-    return predecir_estradistica_por_jugador(player_id)
+    return predecir_estradistica_pase_por_jugador(player_id)
 
+@router.get("/predict/shoot/{player_id}")
+def predecir_pass_por_player(player_id: int):
+    return predecir_estradistica_tiro_por_jugador(player_id)
