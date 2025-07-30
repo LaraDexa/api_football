@@ -3,10 +3,12 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict
+
 from app.services.predictor_service import get_all_stats, add_real_stats
 
 router = APIRouter()
 
+# Ahora POST porque recibe parámetros complejos (jornada)
 @router.post("/predict/player/{player_id}/{jornada}")
 async def predict_player(player_id: int, jornada: int) -> Dict[str, Any]:
     res = get_all_stats(player_id, jornada)
@@ -22,10 +24,11 @@ class RealStats(BaseModel):
     Sh:   float; SoT: float; Gls: float; xG: float
     # regate
     Carries: float; PrgC: float; Att_1: float; Succ: float
+    # defensa (sin Clr)
+    Tkl:   float; Int: float; Blocks: float
 
 @router.post("/predict/player/{player_id}/real")
 async def submit_real_all(player_id: int, s: RealStats) -> Dict[str, Any]:
-    # adaptamos nombres para el diccionario
     stats = {
         "pase": {
             "match_number": s.match_number,
@@ -41,9 +44,14 @@ async def submit_real_all(player_id: int, s: RealStats) -> Dict[str, Any]:
             "match_number": s.match_number,
             "Carries": s.Carries, "PrgC": s.PrgC,
             "Att.1": s.Att_1, "Succ": s.Succ
+        },
+        "defensa": {
+            "match_number": s.match_number,
+            "Tkl": s.Tkl, "Int": s.Int,
+            "Blocks": s.Blocks
         }
     }
     ok = add_real_stats(player_id, stats)
     if not ok:
         raise HTTPException(500, "Error al guardar estadísticas reales")
-    return {"ok": True, "message": "Estadísticas reales guardadas para pase, tiro y regate"}
+    return {"ok": True, "message": "Estadísticas reales guardadas para todas las categorías"}
