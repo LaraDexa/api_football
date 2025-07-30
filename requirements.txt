@@ -1,0 +1,8 @@
+uvicorn
+fastapi
+pandas
+scikit-learn
+openpyxl
+python-dotenv
+openai
+httpx

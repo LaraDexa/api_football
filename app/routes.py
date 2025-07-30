@@ -92,3 +92,12 @@ async def predict_player(
     if not res:
         raise HTTPException(status_code=404, detail="No hay datos para ese jugador/jornada")
     return res
+
+class ChatRequest(BaseModel):
+    prompt: str
+
+@router.post("/chat")
+async def chat_con_usuario(request: ChatRequest):
+    from app.services.chatbot_service import procesar_pregunta
+    respuesta = await procesar_pregunta(request.prompt)
+    return {"respuesta": respuesta}
