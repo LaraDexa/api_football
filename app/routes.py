@@ -7,7 +7,7 @@ from app.services.predictor_service import get_all_stats, add_real_stats
 
 router = APIRouter()
 
-@router.get("/predict/player/{player_id}/{jornada}")
+@router.post("/predict/player/{player_id}/{jornada}")
 async def predict_player(player_id: int, jornada: int) -> Dict[str, Any]:
     res = get_all_stats(player_id, jornada)
     if not res:
