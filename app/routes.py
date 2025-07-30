@@ -47,3 +47,12 @@ async def submit_real_all(player_id: int, s: RealStats) -> Dict[str, Any]:
     if not ok:
         raise HTTPException(500, "Error al guardar estadísticas reales")
     return {"ok": True, "message": "Estadísticas reales guardadas para pase, tiro y regate"}
+
+class ChatRequest(BaseModel):
+    prompt: str
+
+@router.post("/chat")
+async def chat_con_usuario(request: ChatRequest):
+    from app.services.chatbot_service import procesar_pregunta
+    respuesta = await procesar_pregunta(request.prompt)
+    return {"respuesta": respuesta}
