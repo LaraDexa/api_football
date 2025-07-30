@@ -3,12 +3,11 @@
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from sklearn.pipeline        import Pipeline
-from sklearn.preprocessing   import StandardScaler, OrdinalEncoder
-from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, LeaveOneOut
-from sklearn.linear_model    import LinearRegression
-from sklearn.ensemble         import RandomForestRegressor
-from sklearn.neighbors        import KNeighborsRegressor
+from sklearn.pipeline      import Pipeline
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder
+from sklearn.linear_model  import LinearRegression
+from sklearn.ensemble      import RandomForestRegressor
+from sklearn.neighbors     import KNeighborsRegressor
 
 DATA_PATH = Path("data/DATASET_BARCELONA_PROYECT.xlsx")
 
@@ -27,30 +26,8 @@ BASE_MODELS = {
     "Cmp%": LinearRegression(),
     "PrgP": KNeighborsRegressor()
 }
-PARAM_GRIDS = {
-    "Cmp": {
-        "est__n_estimators":     [100,200],
-        "est__max_depth":        [5,10],
-        "est__min_samples_split":[2,5],
-        "est__max_features":     ["sqrt","log2"],
-        "est__bootstrap":        [True,False]
-    },
-    "Att": {
-        "est__n_estimators":     [50,100],
-        "est__max_depth":        [None,5],
-        "est__min_samples_split":[2,5],
-        "est__max_features":     ["sqrt","log2"],
-        "est__bootstrap":        [True,False]
-    },
-    "Cmp%": {
-        "est__fit_intercept": [True,False]
-    },
-    "PrgP": {
-        "est__n_neighbors": [1,2,3,5,7,10],
-        "est__weights":     ["uniform","distance"]
-    }
-}
 
+# Cache de pipelines por jornada
 _pipeline_cache = {}
 
 def _load_and_prepare():
@@ -59,7 +36,7 @@ def _load_and_prepare():
     df["jornada"] = df["Round"].str.extract(r"(\d+)").astype(int)
     df.sort_values(["jornada","Name","Date"], inplace=True)
 
-    # Ingeniería de features
+    # Feature engineering idéntico a antes...
     df["Weekday"]           = df["Date"].dt.weekday
     df["Touch_per_Min"]     = df["Touches"].div(df["Min"].replace(0,1))
     df["Carries_per_Touch"] = df["Carries"].div(df["Touches"].replace(0,1))
@@ -78,92 +55,90 @@ def _load_and_prepare():
     enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
     df[["Venue_enc"]] = enc.fit_transform(df[["Venue"]])
 
-    # imputación por jugador y relleno de NaN
+    # relleno de NaNs por jugador y luego global
     df[FEATURES] = df.groupby("Id")[FEATURES].transform(lambda g: g.fillna(g.mean()))
     df[FEATURES] = df[FEATURES].fillna(0)
 
     return df
 
 def _train_global(jornada: int):
+    """Entrena un pipeline único sobre todos los datos hasta 'jornada'."""
     if jornada in _pipeline_cache:
         return _pipeline_cache[jornada]
 
     df = _load_and_prepare()
     train_df = df[df["jornada"] <= jornada]
     if train_df.empty:
-        train_df = df.copy()
+        train_df = df
 
-    tscv = TimeSeriesSplit(n_splits=5)
     pipelines = {}
-    for t in TARGETS:
-        pipe = Pipeline([("scaler", StandardScaler()), ("est", BASE_MODELS[t])])
-        gs   = GridSearchCV(pipe, PARAM_GRIDS[t], cv=tscv,
-                            scoring="neg_mean_absolute_error", n_jobs=1)
-        gs.fit(train_df[FEATURES], train_df[t])
-        pipelines[t] = gs.best_estimator_
+    for t, model in BASE_MODELS.items():
+        pipe = Pipeline([
+            ("scaler", StandardScaler()),
+            ("est",    model)
+        ])
+        pipe.fit(train_df[FEATURES], train_df[t])
+        pipelines[t] = pipe
 
     _pipeline_cache[jornada] = (pipelines, df)
     return pipelines, df
 
 def _train_player(df_player: pd.DataFrame):
-    n = len(df_player)
-    cv = LeaveOneOut() if n < 5 else TimeSeriesSplit(n_splits=3)
+    """Entrena un pipeline único sobre los datos del jugador."""
     pipelines = {}
-    for t in TARGETS:
-        pipe = Pipeline([("scaler", StandardScaler()), ("est", BASE_MODELS[t])])
-        gs   = GridSearchCV(pipe, PARAM_GRIDS[t], cv=cv,
-                            scoring="neg_mean_absolute_error", n_jobs=1)
-        gs.fit(df_player[FEATURES], df_player[t])
-        pipelines[t] = gs.best_estimator_
+    for t, model in BASE_MODELS.items():
+        pipe = Pipeline([
+            ("scaler", StandardScaler()),
+            ("est",    model)
+        ])
+        pipe.fit(df_player[FEATURES], df_player[t])
+        pipelines[t] = pipe
     return pipelines
 
 def predict_player(player_id: int, jornada: int) -> dict:
     df = _load_and_prepare()
 
-    df_player = df[(df["Id"] == player_id) & (df["jornada"] <= jornada - 1)]
-    if len(df_player) >= 5:
-        pipelines   = _train_player(df_player)
-        df_for_test = df
+    # si tiene >=5 partidos, entrenamos solo con él
+    df_p = df[(df["Id"]==player_id)&(df["jornada"]<=jornada-1)]
+    if len(df_p) >= 5:
+        pipelines = _train_player(df_p)
+        df_test   = df
     else:
-        pipelines, df_for_test = _train_global(max(1,jornada - 1))
+        pipelines, df_test = _train_global(max(1, jornada-1))
 
-    mask_exact = (df_for_test["Id"] == player_id) & (df_for_test["jornada"] == jornada)
-    if mask_exact.any():
-        test_row    = df_for_test.loc[mask_exact]
-        is_fallback = False
+    mask = (df_test["Id"]==player_id)&(df_test["jornada"]==jornada)
+    if mask.any():
+        row, fb = df_test.loc[mask], False
     else:
-        sub         = df_for_test[df_for_test["Id"] == player_id]
-        sub         = sub[sub["jornada"] < jornada]
+        sub = df_test[(df_test["Id"]==player_id)&(df_test["jornada"]<jornada)]
         if sub.empty:
             return {}
-        last_j      = sub["jornada"].max()
-        test_row    = sub[sub["jornada"] == last_j]
-        is_fallback = True
+        last_j = sub["jornada"].max()
+        row    = sub[sub["jornada"]==last_j]
+        fb     = True
 
-    name   = test_row["Name"].iloc[0]
-    X_test = test_row[FEATURES]
-    out    = {}
+    out = {}
     for t, pipe in pipelines.items():
-        pred = pipe.predict(X_test)[0]
-        if is_fallback:
-            real, acc = None, None
+        pred = pipe.predict(row[FEATURES])[0]
+        if not fb:
+            real = float(row[t].iloc[0])
+            acc  = round((1-abs(pred-real)/real)*100, 2) if real else None
         else:
-            real = float(test_row[t].iloc[0])
-            acc  = round((1 - abs(pred - real) / real) * 100, 2) if real else None
+            real = None; acc = None
         out[t] = {
-            "predicted": round(pred,2),
-            "real":      real,
-            "accuracy": acc,
+            "predicted":  round(pred,2),
+            "real":       real,
+            "accuracy":   acc,
             "model_used": pipe.named_steps["est"].__class__.__name__
         }
 
     res = {
         "player_id":   player_id,
-        "player_name": name,
+        "player_name": row["Name"].iloc[0],
         "jornada":     jornada,
         "stats":       {"pase": out}
     }
-    if is_fallback:
+    if fb:
         res["note"] = f"No jugó jornada {jornada}, usando última jornada {last_j}"
     return res
 
@@ -175,5 +150,6 @@ def append_stats_and_retrain(new_row: dict, jornada: int) -> bool:
     _pipeline_cache.clear()
     return True
 
+# para background tasks
 def train_global(jornada: int):
     return _train_global(jornada)

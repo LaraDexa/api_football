@@ -1,18 +1,16 @@
 # app/ml/defense_predictor.py
 
 import pandas as pd
-import numpy as np
 from pathlib import Path
-from sklearn.pipeline        import Pipeline
-from sklearn.preprocessing   import StandardScaler, OrdinalEncoder
-from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, LeaveOneOut
-from sklearn.ensemble        import RandomForestRegressor
-from sklearn.neighbors       import KNeighborsRegressor
+from sklearn.pipeline      import Pipeline
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder
+from sklearn.ensemble      import RandomForestRegressor
+from sklearn.neighbors     import KNeighborsRegressor
 
 DATA_PATH = Path("data/DATASET_BARCELONA_PROYECT.xlsx")
 
-TARGETS_DEF = ["Tkl", "Int", "Blocks"]
-FEATURES    = [
+TARGETS = ["Tkl","Int","Blocks"]
+FEATURES = [
     "Min","Touches","Carries","Venue_enc","Weekday","xAG","SCA",
     "Touch_per_Min","Carries_per_Touch","SCA_per_Touch",
     "Rolling_Avg_xAG","Avg_Min_Last_3","Games_Played",
@@ -25,36 +23,16 @@ BASE_MODELS = {
     "Int":    RandomForestRegressor(random_state=42),
     "Blocks": KNeighborsRegressor()
 }
-PARAM_GRIDS = {
-    "Tkl": {
-        "est__n_estimators":     [100,200],
-        "est__max_depth":        [5,10],
-        "est__min_samples_split":[2,5],
-        "est__max_features":     ["sqrt","log2"],
-        "est__bootstrap":        [True,False]
-    },
-    "Int": {
-        "est__n_estimators":     [100,200],
-        "est__max_depth":        [5,10],
-        "est__min_samples_split":[2,5],
-        "est__max_features":     ["sqrt","log2"],
-        "est__bootstrap":        [True,False]
-    },
-    "Blocks": {
-        "est__n_neighbors": [1,2,3,5,7,10],
-        "est__weights":     ["uniform","distance"]
-    }
-}
 
-_pipeline_cache_def = {}
+_pipeline_cache = {}
 
-def _load_and_prepare_def():
-    df = pd.read_excel(DATA_PATH).dropna(subset=TARGETS_DEF)
+def _load_and_prepare():
+    df = pd.read_excel(DATA_PATH).dropna(subset=TARGETS)
     df["Date"]    = pd.to_datetime(df["Date"])
     df["jornada"] = df["Round"].str.extract(r"(\d+)").astype(int)
     df.sort_values(["jornada","Name","Date"], inplace=True)
 
-    # misma ingeniería
+    # misma ingeniería...
     df["Weekday"]           = df["Date"].dt.weekday
     df["Touch_per_Min"]     = df["Touches"].div(df["Min"].replace(0,1))
     df["Carries_per_Touch"] = df["Carries"].div(df["Touches"].replace(0,1))
@@ -70,80 +48,77 @@ def _load_and_prepare_def():
     df["xAG_diff"]          = df["xAG"] - df["Ast"]
     df["Rolling_CmpPct"]    = rolling["Cmp%"].rolling(3,1).mean().reset_index(level=0,drop=True)
 
-    # Venue encoding
     enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
     df[["Venue_enc"]] = enc.fit_transform(df[["Venue"]])
 
-    # 1) imputar por media del mismo jugador
     df[FEATURES] = df.groupby("Id")[FEATURES].transform(lambda g: g.fillna(g.mean()))
-    # 2) rellenar restantes con 0
     df[FEATURES] = df[FEATURES].fillna(0)
-
     return df
 
-def _train_global_def(jornada: int):
-    if jornada in _pipeline_cache_def:
-        return _pipeline_cache_def[jornada]
-    df       = _load_and_prepare_def()
-    train_df = df[df["jornada"] <= jornada]
-    if train_df.empty:
-        train_df = df.copy()
+def _train_global(jornada: int):
+    if jornada in _pipeline_cache:
+        return _pipeline_cache[jornada]
 
-    cv        = TimeSeriesSplit(n_splits=5)
+    df = _load_and_prepare()
+    train_df = df[df["jornada"] <= jornada] or df
+
     pipelines = {}
-    for t in TARGETS_DEF:
-        pipe = Pipeline([("scaler", StandardScaler()), ("est", BASE_MODELS[t])])
-        gs   = GridSearchCV(pipe, PARAM_GRIDS[t], cv=cv,
-                             scoring="neg_mean_absolute_error", n_jobs=1)
-        gs.fit(train_df[FEATURES], train_df[t])
-        pipelines[t] = gs.best_estimator_
+    for t, model in BASE_MODELS.items():
+        pipe = Pipeline([
+            ("scaler", StandardScaler()),
+            ("est",    model)
+        ])
+        pipe.fit(train_df[FEATURES], train_df[t])
+        pipelines[t] = pipe
 
-    _pipeline_cache_def[jornada] = (pipelines, df)
+    _pipeline_cache[jornada] = (pipelines, df)
     return pipelines, df
 
-def _train_player_def(df_p: pd.DataFrame):
-    n   = len(df_p)
-    cv  = LeaveOneOut() if n < 5 else TimeSeriesSplit(n_splits=3)
-    pipes = {}
-    for t in TARGETS_DEF:
-        pipe = Pipeline([("scaler", StandardScaler()), ("est", BASE_MODELS[t])])
-        gs   = GridSearchCV(pipe, PARAM_GRIDS[t], cv=cv,
-                             scoring="neg_mean_absolute_error", n_jobs=1)
-        gs.fit(df_p[FEATURES], df_p[t])
-        pipes[t] = gs.best_estimator_
-    return pipes
+def _train_player(df_p: pd.DataFrame):
+    pipelines = {}
+    for t, model in BASE_MODELS.items():
+        pipe = Pipeline([
+            ("scaler", StandardScaler()),
+            ("est",    model)
+        ])
+        pipe.fit(df_p[FEATURES], df_p[t])
+        pipelines[t] = pipe
+    return pipelines
 
 def predict_defense(player_id: int, jornada: int) -> dict:
-    df   = _load_and_prepare_def()
-    df_p = df[(df["Id"]==player_id)&(df["jornada"] <= jornada-1)]
+    df = _load_and_prepare()
+    df_p = df[(df["Id"]==player_id)&(df["jornada"]<=jornada-1)]
     if len(df_p) >= 5:
-        pipelines = _train_player_def(df_p)
+        pipelines = _train_player(df_p)
+        df_test   = df
     else:
-        pipelines, df = _train_global_def(max(1, jornada-1))
+        pipelines, df_test = _train_global(max(1,jornada-1))
 
-    mask = (df["Id"]==player_id)&(df["jornada"]==jornada)
+    mask = (df_test["Id"]==player_id)&(df_test["jornada"]==jornada)
     if mask.any():
-        row, fb = df.loc[mask], False
+        row, fb = df_test.loc[mask], False
     else:
-        sub        = df[df["Id"]==player_id]
-        sub        = sub[sub["jornada"]<jornada]
+        sub = df_test[(df_test["Id"]==player_id)&(df_test["jornada"]<jornada)]
         if sub.empty:
             return {}
-        last_j     = sub["jornada"].max()
-        row, fb    = sub[sub["jornada"]==last_j], True
+        last_j = sub["jornada"].max()
+        row    = sub[sub["jornada"]==last_j]
+        fb     = True
 
     out = {}
     for t, pipe in pipelines.items():
         pred = pipe.predict(row[FEATURES])[0]
-        real = float(row[t].iloc[0]) if not fb else None
-        acc  = round((1-abs(pred-real)/real)*100,2) if real else None
+        if not fb:
+            real = float(row[t].iloc[0])
+            acc  = round((1-abs(pred-real)/real)*100,2) if real else None
+        else:
+            real = None; acc = None
         out[t] = {
             "predicted":  round(pred,2),
             "real":       real,
             "accuracy":   acc,
             "model_used": pipe.named_steps["est"].__class__.__name__
         }
-
     return {
         "player_id": player_id,
         "jornada":   jornada,
@@ -156,8 +131,8 @@ def append_stats_and_retrain(new_row: dict, jornada: int) -> bool:
     new_df = pd.DataFrame([new_row])
     df1    = pd.concat([df0, new_df], ignore_index=True)
     df1.to_excel(DATA_PATH, index=False)
-    _pipeline_cache_def.clear()
+    _pipeline_cache.clear()
     return True
 
 def train_global_def(jornada: int):
-    return _train_global_def(jornada)
+    return _train_global(jornada)
