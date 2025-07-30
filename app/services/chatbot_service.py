@@ -17,6 +17,49 @@ def normalizar_texto(texto):
     texto = unicodedata.normalize("NFKD", texto)
     return "".join([c for c in texto if not unicodedata.combining(c)]).strip()
 
+def normalizar_claves(tipo: str, valores: dict) -> dict:
+    if tipo == "goles" or tipo == "tiro":
+        return {
+            "Disparos": valores.get("Sh"),
+            "Disparos al arco": valores.get("SoT"),
+            "Goles": valores.get("Gls"),
+            "Goles esperados (xG)": valores.get("xG"),
+        }
+    if tipo == "pase":
+        return {
+            "Pases completados": valores.get("Cmp"),
+            "Pases intentados": valores.get("Att"),
+            "Precisión de pase (%)": valores.get("Cmp%"),
+            "Pases progresivos": valores.get("PrgP"),
+        }
+    if tipo == "regate":
+        return {
+            "Conducciones totales": valores.get("Carries"),
+            "Conducciones progresivas": valores.get("PrgC"),
+            "Regates intentados": valores.get("Att.1"),
+            "Regates exitosos": valores.get("Succ"),
+        }
+    if tipo == "defensa":
+        return {
+            "Entradas": valores.get("Tkl"),
+            "Intercepciones": valores.get("Int"),
+            "Bloqueos": valores.get("Blocks"),
+        }
+    if tipo == "posesion":
+        return {
+            "Toques": valores.get("Touches"),
+            "Duelos defensivos ganados": valores.get("TklW"),
+            "Veces regateado": valores.get("Drib"),
+        }
+    if tipo == "errores":
+        return {
+            "Pérdidas por mal control": valores.get("Miscontrol"),
+            "Pérdidas por presión": valores.get("Dispossessed"),
+            "Errores que causan gol": valores.get("Err"),
+        }
+    return valores
+
+
 # Carga y verificación del dataset
 print("Cargando dataset de jugadores...")
 try:
@@ -42,17 +85,19 @@ def get_player_id(name: str) -> int:
         return player_id
     raise ValueError(f"No se encontró el jugador '{name}'.")
 
+STAT_KEYWORDS = {
+    "gol": "tiro", "goles": "tiro", "xg": "tiro", "tiros": "tiro", "disparos": "tiro", "remates": "tiro",
+    "asistencias": "pase", "asistencia": "pase",
+    "pase": "pase", "pases": "pase", "cmp": "pase",
+    "regate": "regate", "regates": "regate", "drible": "regate", "dribles": "regate", "conduccion": "regate",
+    "defensa": "defensa", "entradas": "defensa", "intercepciones": "defensa", "bloqueos": "defensa",
+    "posesion": "posesion", "toques": "posesion", "duelos": "posesion", "tklw": "posesion", "drib": "posesion",
+    "errores": "errores", "perdidas": "errores", "err": "errores"
+}
+
 def map_stat_to_key(stat: str) -> str:
-    print(f"Mapeando estadística: {stat}")
     stat = stat.lower()
-    if stat in ["gol", "goles", "xg"]:
-        return "tiro"
-    elif stat in ["pase", "asistencias", "cmp"]:
-        return "pase"
-    elif stat in ["regate", "drible", "conduccion"]:
-        return "regate"
-    else:
-        raise ValueError(f"Estadística '{stat}' no reconocida.")
+    return STAT_KEYWORDS.get(stat, None)
 
 def identificar_jugador(palabras: list[str]) -> str | None:
     frase = " ".join(palabras)
@@ -77,7 +122,15 @@ async def procesar_pregunta(prompt: str, jornada: int) -> str:
         print(f"Jugador identificado: {jugador}")
         
         # Identificación de estadísticas
-        estadisticas_clave = ["gol", "goles", "asistencias", "pase", "xg", "regate", "drible", "conduccion"]
+        estadisticas_clave = [
+            "gol", "goles", "xg", "asistencias", 
+            "pase", "pases", "cmp", 
+            "regate", "regates", "drible", "dribles", "conduccion", 
+            "tiros", "disparos", "remates",
+            "defensa", "entradas", "intercepciones", "bloqueos",
+            "posesion", "toques", "duelos", "tklw", "drib", 
+            "errores", "perdidas", "errores que causan gol"
+        ]
         estadistica = next((p for p in palabras_limpias if p in estadisticas_clave), None)
         print(f"Estadística identificada: {estadistica}")
 
@@ -86,8 +139,10 @@ async def procesar_pregunta(prompt: str, jornada: int) -> str:
             print("Error: No se pudo identificar el jugador")
             return "No pude identificar al jugador en tu pregunta. ¿Podrías confirmar el nombre?"
         if not estadistica:
+            estadisticas_disponibles = sorted(set(STAT_KEYWORDS.keys()))
+            lista_str = ", ".join(estadisticas_disponibles)
             print("Error: No se pudo identificar la estadística")
-            return "No pude identificar qué estadística necesitas. ¿Quieres saber sobre goles, asistencias, regates...?"
+            return f"No pude identificar qué estadística necesitas. Puedes preguntarme por: {lista_str}."
 
         # Obtención de datos del jugador
         player_id = get_player_id(jugador)
@@ -113,11 +168,21 @@ async def procesar_pregunta(prompt: str, jornada: int) -> str:
             print(f"Error: Tipo '{tipo}' no encontrado en predicciones")
             return f"No se encontró la estadística '{tipo}' para el jugador {jugador}."
 
-        valores = all_predictions['stats'][tipo]
+        valores = all_predictions['stats'].get(tipo)
+        if not valores:
+            return f"No se encontraron estadísticas para el tipo: {tipo}"
+
         print(f"Valores encontrados para {tipo}: {valores}")
 
+        # Normalizar claves para hacerlas legibles
+        valores_normalizados = normalizar_claves(tipo, valores)
+
         # Preparación de la respuesta
-        texto_prediccion = ", ".join([f"{k} = {v}" for k, v in valores.items() if k != "match_number"])
+        valores_normalizados = normalizar_claves(tipo, valores)
+        texto_prediccion = ", ".join([
+            f"{clave}: {valor['predicted']:.2f}" 
+            for clave, valor in valores_normalizados.items() if isinstance(valor, dict)
+        ])
         print(f"Texto de predicción generado: {texto_prediccion}")
 
         prompt_openai = (
