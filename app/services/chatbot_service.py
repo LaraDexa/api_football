@@ -5,10 +5,17 @@ import pandas as pd
 from dotenv import load_dotenv
 import logging
 import re
+import unicodedata
 
 # Configuración inicial
 load_dotenv()
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Función para normalizar texto (sin tildes, minúsculas)
+def normalizar_texto(texto):
+    texto = texto.lower()
+    texto = unicodedata.normalize("NFKD", texto)
+    return "".join([c for c in texto if not unicodedata.combining(c)]).strip()
 
 # Carga y verificación del dataset
 print("Cargando dataset de jugadores...")
@@ -16,11 +23,15 @@ try:
     df = pd.read_excel("data/DATASET_BARCELONA_PROYECT.xlsx").drop_duplicates(subset=["Name"])
     if df.empty:
         raise ValueError("El dataset de jugadores está vacío. Verifica el archivo Excel.")
+    df["nombre_normalizado"] = df["Name"].apply(normalizar_texto)
     print(f"Dataset cargado correctamente. Total de jugadores únicos: {len(df)}")
-    print("Jugadores disponibles:", df['Name'].unique())
+    print("Jugadores disponibles:", df["Name"].unique())
 except Exception as e:
     print(f"Error cargando el dataset: {str(e)}")
     raise
+
+# Diccionario de nombres normalizados → originales
+jugadores_dict = dict(zip(df["nombre_normalizado"], df["Name"]))
 
 def get_player_id(name: str) -> int:
     print(f"Buscando ID para jugador: {name}")
@@ -43,28 +54,30 @@ def map_stat_to_key(stat: str) -> str:
     else:
         raise ValueError(f"Estadística '{stat}' no reconocida.")
 
-async def procesar_pregunta(prompt: str) -> str:
+def identificar_jugador(palabras: list[str]) -> str | None:
+    frase = " ".join(palabras)
+    for normalizado, original in jugadores_dict.items():
+        if normalizado in frase:
+            return original
+    return None
+
+async def procesar_pregunta(prompt: str, jornada: int) -> str:
     try:
         print(f"\nIniciando procesamiento de pregunta: '{prompt}'")
         logging.info(f"Recibido prompt: {prompt}")
         
         # Limpieza y normalización del prompt
-        palabras_limpias = re.sub(r'[^\w\s]', '', prompt.lower()).split()
+        prompt_limpio = normalizar_texto(re.sub(r"[^\w\s]", "", prompt))
+        palabras_limpias = prompt_limpio.split()
         print(f"Palabras limpias identificadas: {palabras_limpias}")
         
-        # Lista de nombres de jugadores en minúsculas
-        nombres_jugadores = [name.lower() for name in df['Name'].unique()]
         
         # Identificación del jugador
-        jugador = None
-        for palabra in palabras_limpias:
-            if palabra in nombres_jugadores:
-                jugador = palabra.capitalize()
-                break
+        jugador = identificar_jugador(palabras_limpias)
         print(f"Jugador identificado: {jugador}")
         
         # Identificación de estadísticas
-        estadisticas_clave = ["gol", "goles", "asistencias", "pase", "xg", "regate"]
+        estadisticas_clave = ["gol", "goles", "asistencias", "pase", "xg", "regate", "drible", "conduccion"]
         estadistica = next((p for p in palabras_limpias if p in estadisticas_clave), None)
         print(f"Estadística identificada: {estadistica}")
 
@@ -82,8 +95,7 @@ async def procesar_pregunta(prompt: str) -> str:
         print(f"Tipo de estadística mapeada: {tipo}")
 
         # Llamada a la API de predicción
-        jornada = 21
-        url = f"http://localhost:8000/predict/player/{player_id}/{jornada}"
+        url = f"http://localhost:8000/predict/player/{player_id}/jornada/{jornada}"
         print(f"Realizando request a: {url}")
         
         async with httpx.AsyncClient() as http_client:
@@ -113,7 +125,9 @@ async def procesar_pregunta(prompt: str) -> str:
             f"Jugador: {jugador}\n"
             f"Tipo de estadística: {tipo}\n"
             f"La predicción para la jornada {jornada} es: {texto_prediccion}.\n"
-            "Responde de manera clara, amigable y sin tecnicismos, como si hablaras con un fan del fútbol que no conoce términos técnicos. Explica brevemente cómo se obtuvo la predicción (por ejemplo, analizando datos del jugador) y da una respuesta natural, confiable y entusiasta, como un comentarista deportivo."
+            "Responde de manera clara, amigable y sin tecnicismos, como si hablaras con un fan del fútbol que no conoce términos técnicos."
+            "Explica brevemente cómo se obtuvo la predicción (por ejemplo, analizando datos del jugador) y da una respuesta natural, confiable y entusiasta, como un comentarista deportivo."
+            "Toma en cuenta el limite de tokens asignado (150) y evita respuestas largas o redundantes."
         )
         print(f"Prompt para OpenAI:\n{prompt_openai}")
 

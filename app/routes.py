@@ -1,5 +1,3 @@
-# app/routes.py
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict
@@ -50,9 +48,10 @@ async def submit_real_all(player_id: int, s: RealStats) -> Dict[str, Any]:
 
 class ChatRequest(BaseModel):
     prompt: str
+    jornada: int
 
 @router.post("/chat")
 async def chat_con_usuario(request: ChatRequest):
     from app.services.chatbot_service import procesar_pregunta
-    respuesta = await procesar_pregunta(request.prompt)
+    respuesta = await procesar_pregunta(request.prompt, request.jornada)
     return {"respuesta": respuesta}
