@@ -1,4 +1,4 @@
-# app/ml/shoot_predictor.py
+# app/ml/dribble_predictor.py
 
 import pandas as pd
 import numpy as np
@@ -6,14 +6,13 @@ from pathlib import Path
 from sklearn.pipeline        import Pipeline
 from sklearn.preprocessing   import StandardScaler, OrdinalEncoder
 from sklearn.model_selection import TimeSeriesSplit, GridSearchCV, LeaveOneOut
-from sklearn.linear_model    import LinearRegression
 from sklearn.ensemble        import RandomForestRegressor
+from sklearn.neighbors       import KNeighborsRegressor
 
 DATA_PATH = Path("data/DATASET_BARCELONA_PROYECT.xlsx")
 
-# Estadísticas de tiro que vamos a predecir
-TARGETS_SHOOT = ["Sh", "SoT", "Gls", "xG"]
-# Usamos exactamente las mismas features que en pases
+# Estadísticas de regate que vamos a predecir
+TARGETS_DRIBBLE = ["Carries", "PrgC", "Att.1", "Succ"]
 FEATURES = [
     "Min","Touches","Carries","Venue_enc","Weekday","xAG","SCA",
     "Touch_per_Min","Carries_per_Touch","SCA_per_Touch",
@@ -22,87 +21,72 @@ FEATURES = [
     "Rolling_CmpPct","delta_Min"
 ]
 
-# Modelos base y grids (idénticos a pases, solo regresión)
 BASE_MODELS = {
-    "Sh":  RandomForestRegressor(random_state=42),
-    "SoT": RandomForestRegressor(random_state=42),
-    "Gls": LinearRegression(),
-    "xG":  LinearRegression()
+    "Carries": RandomForestRegressor(random_state=42),
+    "PrgC":    RandomForestRegressor(random_state=42),
+    "Att.1":   KNeighborsRegressor(),
+    "Succ":    KNeighborsRegressor()
 }
 PARAM_GRIDS = {
-    "Sh": {
-        "est__n_estimators": [100,200],
-        "est__max_depth":    [5,10],
-        "est__min_samples_split":[2,5],
-        "est__max_features":[ "sqrt","log2"],
-        "est__bootstrap":[True,False]
-    },
-    "SoT": {
-        "est__n_estimators": [100,200],
-        "est__max_depth":    [5,10],
-        "est__min_samples_split":[2,5],
-        "est__max_features":["sqrt","log2"],
-        "est__bootstrap":[True,False]
-    },
-    "Gls": {"est__fit_intercept":[True,False]},
-    "xG":  {"est__fit_intercept":[True,False]}
+    "Carries": {"est__n_estimators":[100,200], "est__max_depth":[5,10]},
+    "PrgC":    {"est__n_estimators":[100,200], "est__max_depth":[5,10]},
+    "Att.1":   {"est__n_neighbors":[1,2,3,5], "est__weights":["uniform","distance"]},
+    "Succ":    {"est__n_neighbors":[1,2,3,5], "est__weights":["uniform","distance"]}
 }
 
-# Cache global
-_pipeline_cache_shoot = {}
+_pipeline_cache_dribble = {}
 
-def _load_and_prepare_shoot():
-    df = pd.read_excel(DATA_PATH).dropna(subset=TARGETS_SHOOT)
+def _load_and_prepare_dribble():
+    df = pd.read_excel(DATA_PATH).dropna(subset=TARGETS_DRIBBLE)
     df["Date"] = pd.to_datetime(df["Date"])
     df["jornada"] = df["Round"].str.extract(r"(\d+)").astype(int)
     df.sort_values(["jornada","Name","Date"], inplace=True)
 
-    # Mismas features que en pases
+    # misma feature‐engineering
     df["Weekday"]           = df["Date"].dt.weekday
-    df["Touch_per_Min"]     = df["Touches"] / df["Min"].replace(0,1)
-    df["Carries_per_Touch"] = df["Carries"] / df["Touches"].replace(0,1)
-    df["SCA_per_Touch"]     = df["SCA"]     / df["Touches"].replace(0,1)
+    df["Touch_per_Min"]     = df["Touches"]/df["Min"].replace(0,1)
+    df["Carries_per_Touch"] = df["Carries"]/df["Touches"].replace(0,1)
+    df["SCA_per_Touch"]     = df["SCA"]/df["Touches"].replace(0,1)
     df["delta_Min"]         = df.groupby("Name")["Min"].diff().fillna(0)
     rolling = df.groupby("Name")
     df["Rolling_Avg_xAG"]   = rolling["xAG"].rolling(3,1).mean().reset_index(level=0,drop=True)
     df["Avg_Min_Last_3"]    = rolling["Min"].rolling(3,1).mean().reset_index(level=0,drop=True)
-    df["Games_Played"]      = rolling.cumcount() + 1
-    df["Carries_per_90"]    = df["Carries"] / (df["Min"].replace(0,1)/90)
-    df["SCA_per_90"]        = df["SCA"]     / (df["Min"].replace(0,1)/90)
+    df["Games_Played"]      = rolling.cumcount()+1
+    df["Carries_per_90"]    = df["Carries"]/(df["Min"].replace(0,1)/90)
+    df["SCA_per_90"]        = df["SCA"]    /(df["Min"].replace(0,1)/90)
     df["Min_per_Game"]      = rolling["Min"].transform("mean")
     df["xAG_diff"]          = df["xAG"] - df["Ast"]
     df["Rolling_CmpPct"]    = rolling["Cmp%"].rolling(3,1).mean().reset_index(level=0,drop=True)
 
-    # Venue encoding (igual que en pases)
     enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
     df[["Venue_enc"]] = enc.fit_transform(df[["Venue"]])
     return df
 
-def _train_global_shoot(jornada: int):
-    if jornada in _pipeline_cache_shoot:
-        return _pipeline_cache_shoot[jornada]
-    df = _load_and_prepare_shoot()
+def _train_global_dribble(jornada: int):
+    if jornada in _pipeline_cache_dribble:
+        return _pipeline_cache_dribble[jornada]
+    df = _load_and_prepare_dribble()
     train_df = df[df["jornada"] <= jornada]
     if train_df.empty:
         train_df = df.copy()
 
     cv = TimeSeriesSplit(n_splits=5)
     pipelines = {}
-    for t in TARGETS_SHOOT:
+    for t in TARGETS_DRIBBLE:
         pipe = Pipeline([("scaler", StandardScaler()), ("est", BASE_MODELS[t])])
         gs   = GridSearchCV(pipe, PARAM_GRIDS[t], cv=cv,
                             scoring="neg_mean_absolute_error", n_jobs=1)
         gs.fit(train_df[FEATURES], train_df[t])
         pipelines[t] = gs.best_estimator_
 
-    _pipeline_cache_shoot[jornada] = (pipelines, df)
+    _pipeline_cache_dribble[jornada] = (pipelines, df)
     return pipelines, df
 
-def _train_player_shoot(df_player: pd.DataFrame):
+def _train_player_dribble(df_player: pd.DataFrame):
     n = len(df_player)
-    cv = LeaveOneOut() if n < 5 else TimeSeriesSplit(n_splits=3)
+    cv = LeaveOneOut() if n<5 else TimeSeriesSplit(n_splits=3)
     pipelines = {}
-    for t in TARGETS_SHOOT:
+    for t in TARGETS_DRIBBLE:
         pipe = Pipeline([("scaler", StandardScaler()), ("est", BASE_MODELS[t])])
         gs   = GridSearchCV(pipe, PARAM_GRIDS[t], cv=cv,
                             scoring="neg_mean_absolute_error", n_jobs=1)
@@ -110,25 +94,21 @@ def _train_player_shoot(df_player: pd.DataFrame):
         pipelines[t] = gs.best_estimator_
     return pipelines
 
-def predict_shoot(player_id: int, jornada: int) -> dict:
-    df = _load_and_prepare_shoot()
-    # datos del jugador hasta jornada-1
+def predict_dribble(player_id: int, jornada: int) -> dict:
+    df = _load_and_prepare_dribble()
     df_p = df[(df["Id"]==player_id)&(df["jornada"]<=jornada-1)]
     if len(df_p)>=5:
-        pipelines = _train_player_shoot(df_p)
+        pipelines = _train_player_dribble(df_p)
     else:
-        pipelines, df = _train_global_shoot(jornada-1)
+        pipelines, df = _train_global_dribble(jornada-1)
 
-    # fila de test
     mask = (df["Id"]==player_id)&(df["jornada"]==jornada)
     if mask.any():
         row = df.loc[mask]
     else:
-        # fallback: última previa
         sub = df[df["Id"]==player_id]
         sub = sub[sub["jornada"]<jornada]
-        if sub.empty:
-            return {}
+        if sub.empty: return {}
         last_j = sub["jornada"].max()
         row    = sub[sub["jornada"]==last_j]
 
@@ -137,7 +117,7 @@ def predict_shoot(player_id: int, jornada: int) -> dict:
         pred = pipe.predict(row[FEATURES])[0]
         real = float(row[t].iloc[0]) if mask.any() else None
         acc  = round((1-abs(pred-real)/real)*100,2) if real else None
-        out[t] = {"predicted":round(pred,2), "real":real,
+        out[t] = {"predicted":round(pred,2),"real":real,
                   "accuracy":acc,
                   "model_used":pipe.named_steps["est"].__class__.__name__}
 
